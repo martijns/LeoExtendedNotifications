@@ -16,10 +16,21 @@
 #define LEN_NOTIFY_CALLS 1
 */
 
+void NotificationChanged();
+void LockModeChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, const UINT cbData);
 void NotificationChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, const UINT cbData);
+void SyncChargeStatusChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, const UINT cbData);
+
 void SetUnattended(bool on);
+void readConfig();
+void createNotifyHooks();
+void clearNotifiyHooks();
 bool IsKeypadLedControlRunning();
 bool ShouldNotify();
+void exitProgram();
+bool getSyncChargeStatus();
+void updateStartTime();
+void updateStopTime();
 
 void KeypadBlinkStart();
 void KeypadBlinkStop();
@@ -27,28 +38,44 @@ DWORD KeypadBlinkThreadStart(LPVOID);
 HANDLE KeypadBlinkThread = NULL;
 HANDLE KeypadBlinkThreadEvent = NULL;
 
+SYSTEMTIME stBlinkStart, stBlinkStop;
+FILETIME ftBlinkStart, ftBlinkStop;
+LARGE_INTEGER liBlinkStart, liBlinkStop;
+const int tDivider = 10000000;
+
+DWORD blinkTimeOut = 300;
+DWORD timeOutCount = 1;
+
 DWORD notifyBySMS = 1;
+DWORD notifyByMMS = 1;
 DWORD notifyByMail = 1;
 DWORD notifyByCall = 1;
 DWORD notifyByVmail = 1;
 DWORD stopInCall = 1;
+DWORD clearByUnlock = 1;
+DWORD notifications = 0;
 
+HREGNOTIFY hMyNotify;
 HREGNOTIFY hSmsNotify;
+HREGNOTIFY hMmsNotify;
 HREGNOTIFY hEmailNotify;
 HREGNOTIFY hCallsNotify;
 HREGNOTIFY hVmailNotify;
 HREGNOTIFY hInCallStatus;
+HREGNOTIFY hkeyLockStatus;
+HREGNOTIFY hASyncStatus;
+HREGNOTIFY hPowertStatus;
 
-int _tmain(int argc, _TCHAR* argv[])
-{
-	RegistryGetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("SMS"), &notifyBySMS);
-	RegistryGetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("MAIL"), &notifyByMail);
-	RegistryGetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("CALL"), &notifyByCall);
-	RegistryGetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("VMAIL"), &notifyByVmail);
-	RegistryGetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("STOP"), &stopInCall);
+HANDLE appEvent = NULL;
 
+bool bUsingUnattendedMode = false;
+bool isLocked = false;
+bool dontBlink = true;
+bool timeOut = true;
+
+int _tmain(int argc, _TCHAR* argv[]) {
 	// Create an event for ourselves, so that we can be turned off as well
-	HANDLE appEvent = CreateEvent(NULL, TRUE, FALSE, L"LedExtendedNotificationsApp");
+	appEvent = CreateEvent(NULL, TRUE, FALSE, L"LedExtendedNotificationsApp");
 	if (appEvent == NULL)
 	{
 		MessageBox(NULL, L"Couldn't create an event for ourselves", L"Error", MB_OK);
@@ -72,30 +99,8 @@ int _tmain(int argc, _TCHAR* argv[])
 		return 1;
 	}
 
-	// Request notifications
-	if (stopInCall == 1) {
-		::RegistryNotifyCallback(SN_PHONEACTIVECALLCOUNT_ROOT, SN_PHONEACTIVECALLCOUNT_PATH, SN_PHONEACTIVECALLCOUNT_VALUE,
-			NotificationChanged, 0, NULL, &hInCallStatus);
-	}
-
-//#if LEN_NOTIFY_SMS
-	if (notifyBySMS == 1) {
-		::RegistryNotifyCallback(SN_MESSAGINGSMSUNREAD_ROOT, SN_MESSAGINGSMSUNREAD_PATH, SN_MESSAGINGSMSUNREAD_VALUE,
-			NotificationChanged, 0, NULL, &hSmsNotify);
-	}
-//#endif
-//#if LEN_NOTIFY_CALLS
-	if (notifyByCall == 1) {
-		::RegistryNotifyCallback(SN_PHONEMISSEDCALLS_ROOT, SN_PHONEMISSEDCALLS_PATH, SN_PHONEMISSEDCALLS_VALUE,
-			NotificationChanged, 0, NULL, &hCallsNotify);
-	}
-//#endif
-//#if LEN_NOTIFY_EMAIL
-	if (notifyByMail == 1) {
-		::RegistryNotifyCallback(SN_MESSAGINGTOTALEMAILUNREAD_ROOT, SN_MESSAGINGTOTALEMAILUNREAD_PATH, SN_MESSAGINGTOTALEMAILUNREAD_VALUE,
-			NotificationChanged, 0, NULL, &hEmailNotify);
-	}
-//#endif
+	readConfig();
+	createNotifyHooks();
 
 	// Check initial state
 	if (ShouldNotify())
@@ -116,30 +121,14 @@ int _tmain(int argc, _TCHAR* argv[])
 	// Wait until signal for exit
 	WaitForSingleObject(appEvent, INFINITE);
 
-	// Cleanup
-	if (stopInCall == 1) {
-		RegistryCloseNotification(hInCallStatus);
-	}
+	exitProgram();
 
-//#if LEN_NOTIFY_SMS
-	if (notifyBySMS == 1) {
-		RegistryCloseNotification(hSmsNotify);
-	}
-//#endif
-//#if LEN_NOTIFY_CALLS
-	if (notifyByCall == 1) {
-		RegistryCloseNotification(hCallsNotify);
-	}
-//#endif
-//#if LEN_NOTIFY_EMAIL
-	if (notifyByMail == 1) {
-		RegistryCloseNotification(hEmailNotify);
-	}
-//#endif
+	return 0;
+}
 
-	if (notifyByVmail == 1) {
-		RegistryCloseNotification(hVmailNotify);
-	}
+void exitProgram()
+{
+	clearNotifiyHooks();
 
 	SetUnattended(false);
 	KeypadBlinkStop();
@@ -149,11 +138,104 @@ int _tmain(int argc, _TCHAR* argv[])
 //#if LEN_MSGBOX
 	MessageBox(NULL, L"bye bye!", L"LeoExtendedNotifications", MB_OK | MB_TOPMOST);
 //#endif
-
-	return 0;
 }
 
-bool bUsingUnattendedMode = false;
+void clearNotifiyHooks()
+{
+	// Cleanup
+
+	RegistryCloseNotification(hMyNotify);
+	RegistryCloseNotification(hASyncStatus);
+	RegistryCloseNotification(hPowertStatus);
+
+	if (clearByUnlock == 1) {
+		RegistryCloseNotification(hkeyLockStatus);
+	}
+
+	if (stopInCall == 1) {
+		RegistryCloseNotification(hInCallStatus);
+	}
+	
+	if (notifyBySMS == 1) {
+		RegistryCloseNotification(hSmsNotify);
+	}
+
+	if (notifyByMMS == 1) {
+		RegistryCloseNotification(hMmsNotify);
+	}
+
+	if (notifyByCall == 1) {
+		RegistryCloseNotification(hCallsNotify);
+	}
+
+	if (notifyByMail == 1) {
+		RegistryCloseNotification(hEmailNotify);
+	}
+
+	if (notifyByVmail == 1) {
+		RegistryCloseNotification(hVmailNotify);
+	}
+}
+
+void createNotifyHooks()
+{
+	// Request notifications
+	::RegistryNotifyCallback(SN_ACTIVESYNCSTATUS_ROOT, SN_ACTIVESYNCSTATUS_PATH, SN_ACTIVESYNCSTATUS_VALUE,
+		SyncChargeStatusChanged, 0, NULL, &hASyncStatus);
+
+	::RegistryNotifyCallback(SN_POWERBATTERYSTATE_ROOT, SN_POWERBATTERYSTATE_PATH, SN_POWERBATTERYSTATE_VALUE,
+		SyncChargeStatusChanged, 0, NULL, &hPowertStatus);
+
+	if (clearByUnlock == 1) {
+		::RegistryNotifyCallback(SN_LOCK_ROOT, SN_LOCK_PATH, SN_LOCK_VALUE, LockModeChanged, 0, NULL, &hkeyLockStatus);
+	}
+
+	DWORD fakeParam = 1;
+	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("_tOut"),
+		NotificationChanged, fakeParam, NULL, &hMyNotify);
+	
+	fakeParam = 2;
+	if (stopInCall == 1) {
+		::RegistryNotifyCallback(SN_PHONEACTIVECALLCOUNT_ROOT, SN_PHONEACTIVECALLCOUNT_PATH, SN_PHONEACTIVECALLCOUNT_VALUE,
+			NotificationChanged, fakeParam, NULL, &hInCallStatus);
+	}
+
+	if (notifyBySMS == 1) {
+		::RegistryNotifyCallback(SN_MESSAGINGSMSUNREAD_ROOT, SN_MESSAGINGSMSUNREAD_PATH, SN_MESSAGINGSMSUNREAD_VALUE,
+			NotificationChanged, fakeParam, NULL, &hSmsNotify);
+	}
+
+	if (notifyByMMS == 1) {
+		::RegistryNotifyCallback(SN_MESSAGINGMMSUNREAD_ROOT, SN_MESSAGINGMMSUNREAD_PATH, SN_MESSAGINGMMSUNREAD_VALUE,
+			NotificationChanged, fakeParam, NULL, &hMmsNotify);
+	}
+
+	if (notifyByCall == 1) {
+		::RegistryNotifyCallback(SN_PHONEMISSEDCALLS_ROOT, SN_PHONEMISSEDCALLS_PATH, SN_PHONEMISSEDCALLS_VALUE,
+			NotificationChanged, fakeParam, NULL, &hCallsNotify);
+	}
+
+	if (notifyByMail == 1) {
+		::RegistryNotifyCallback(SN_MESSAGINGTOTALEMAILUNREAD_ROOT, SN_MESSAGINGTOTALEMAILUNREAD_PATH, SN_MESSAGINGTOTALEMAILUNREAD_VALUE,
+			NotificationChanged, fakeParam, NULL, &hEmailNotify);
+	}
+}
+
+void readConfig()
+{
+	::RegistrySetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("_tOut"), 0x00000000);
+
+	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("SMS"), &notifyBySMS);
+	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("MMS"), &notifyByMMS);
+	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("MAIL"), &notifyByMail);
+	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("CALL"), &notifyByCall);
+	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("VMAIL"), &notifyByVmail);
+
+	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("STOP"), &stopInCall);
+	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("UNLOCK"), &clearByUnlock);
+	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("DURATION"), &blinkTimeOut);
+}
+
 void SetUnattended(bool on)
 {
 	if (on && !bUsingUnattendedMode)
@@ -184,6 +266,8 @@ bool IsKeypadLedControlRunning()
 
 bool ShouldNotify()
 {
+	notifications = 0;
+
 	if (stopInCall == 1) {
 		DWORD hIsInCall = 0;
 		::RegistryGetDWORD(SN_PHONEACTIVECALLCOUNT_ROOT, SN_PHONEACTIVECALLCOUNT_PATH, SN_PHONEACTIVECALLCOUNT_VALUE, &hIsInCall);
@@ -191,63 +275,166 @@ bool ShouldNotify()
 			return false;
 		}
 	}
+	
+	// getSyncChargeStatus returns true if syncing or charging == (battery < 100%)
+	//if (!getSyncChargeStatus() && dontBlink) {
+	if (dontBlink) {
+		return false;
+	}
 
-//#if LEN_NOTIFY_SMS
 	if (notifyBySMS == 1) {
 		DWORD unreadSms = 0;
 		::RegistryGetDWORD(SN_MESSAGINGSMSUNREAD_ROOT, SN_MESSAGINGSMSUNREAD_PATH, SN_MESSAGINGSMSUNREAD_VALUE, &unreadSms);
-		if (unreadSms > 0)
-			return true;
+		if (unreadSms > 0) {
+			notifications += unreadSms;
+		}
 	}
-//#endif
-//#if LEN_NOTIFY_CALLS
+
+	if (notifyByMMS == 1) {
+		DWORD unreadMms = 0;
+		::RegistryGetDWORD(SN_MESSAGINGMMSUNREAD_ROOT, SN_MESSAGINGMMSUNREAD_PATH, SN_MESSAGINGMMSUNREAD_VALUE, &unreadMms);
+		if (unreadMms > 0) {
+			notifications += unreadMms;
+		}
+	}
+
 	if (notifyByCall == 1) {
 		DWORD missedCalls = 0;
 		::RegistryGetDWORD(SN_PHONEMISSEDCALLS_ROOT, SN_PHONEMISSEDCALLS_PATH, SN_PHONEMISSEDCALLS_VALUE, &missedCalls);
-		if (missedCalls > 0)
-			return true;
+		if (missedCalls > 0) {
+			notifications += missedCalls;
+		}
 	}
-//#endif
-//#if LEN_NOTIFY_EMAIL
+
 	if (notifyByMail == 1) {
 		DWORD unreadEmail = 0;
 		::RegistryGetDWORD(SN_MESSAGINGTOTALEMAILUNREAD_ROOT, SN_MESSAGINGTOTALEMAILUNREAD_PATH, SN_MESSAGINGTOTALEMAILUNREAD_VALUE, &unreadEmail);
-		if (unreadEmail > 0)
-			return true;
+		if (unreadEmail > 0) {
+			notifications += unreadEmail;
+		}
 	}
-//#endif
 
 	if (notifyByVmail == 1) {
 		DWORD vMails = 0;
 		::RegistryGetDWORD(SN_MESSAGINGVOICEMAILTOTALUNREAD_ROOT, SN_MESSAGINGVOICEMAILTOTALUNREAD_PATH, SN_MESSAGINGVOICEMAILTOTALUNREAD_VALUE, &vMails);
-		if (vMails > 0)
-			return true;
+		if (vMails > 0) {
+			notifications += vMails;
+		}
+	}
+
+	if (blinkTimeOut > 0) {
+		DWORD htOut = 0;
+		::RegistryGetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("_tOut"), &htOut);
+		if (htOut > notifications) {
+			return false;
+		}
+	}
+
+	return (notifications > 0);
+}
+
+bool timedOut()
+{
+	if (blinkTimeOut == 0) {
+		return false;
+	}
+
+	updateStopTime();
+	if(liBlinkStop.QuadPart == NULL || liBlinkStart.QuadPart == NULL) {
+		return false;
+	}
+
+	DWORD diff = (liBlinkStop.QuadPart - liBlinkStart.QuadPart) / tDivider;
+	if (diff >= blinkTimeOut) {
+		return true;
 	}
 
 	return false;
 }
 
+bool getSyncChargeStatus()
+{
+	DWORD hIsSyncing = 0;
+	::RegistryGetDWORD(SN_ACTIVESYNCSTATUS_ROOT, SN_ACTIVESYNCSTATUS_PATH, SN_ACTIVESYNCSTATUS_VALUE, &hIsSyncing);
+
+	DWORD hIsCharging = 0;
+	::RegistryGetDWORD(SN_POWERBATTERYSTATE_ROOT, SN_POWERBATTERYSTATE_PATH, SN_POWERBATTERYSTATE_VALUE, &hIsCharging);
+	hIsCharging = SN_POWERBATTERYSTATE_BITMASK & hIsCharging;
+
+	DWORD hBattPerc = 0;
+	::RegistryGetDWORD(SN_POWERBATTERYSTRENGTH_ROOT, SN_POWERBATTERYSTRENGTH_PATH, SN_POWERBATTERYSTRENGTH_VALUE, &hBattPerc);
+	hBattPerc = SN_POWERBATTERYSTRENGTH_BITMASK & hBattPerc;
+
+	return (hIsSyncing == 1 || hIsCharging == SN_POWERBATTERYSTATE_FLAG_CHARGING || hBattPerc  >= 5308000);
+}
+
+void SyncChargeStatusChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, const UINT cbData)
+{
+	NotificationChanged();
+}
+
+void LockModeChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, const UINT cbData)
+{
+	if (clearByUnlock == 0) {
+		return;
+	}
+
+	DWORD lockStatus = 0;
+	::RegistryGetDWORD(SN_LOCK_ROOT, SN_LOCK_PATH, SN_LOCK_VALUE, &lockStatus);
+	if (isLocked && lockStatus == 0) {
+		dontBlink = !(isLocked = false);
+		NotificationChanged();
+
+	} else if (lockStatus == SN_LOCK_BITMASK_KEYLOCKED) {
+		dontBlink = !(isLocked = true);
+		NotificationChanged();
+	}
+}
+
+void NotificationChanged()
+{
+	NotificationChanged(NULL, NULL, NULL, NULL);
+}
+
 void NotificationChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, const UINT cbData)
 {
-	if (ShouldNotify())
-	{
+	if (dwUserData != NULL && blinkTimeOut > 0) {
+		updateStartTime();
+	}
+	
+	if (ShouldNotify()) {
 		SetUnattended(true);
 		KeypadBlinkStart();
-	}
-	else
-	{
+
+	} else {
 		SetUnattended(false);
 		KeypadBlinkStop();
 	}
 }
 
+void updateStartTime()
+{
+	timeOut = false;
+
+	GetSystemTime(&stBlinkStart);
+	SystemTimeToFileTime(&stBlinkStart, &ftBlinkStart);
+	liBlinkStart.LowPart = ftBlinkStart.dwLowDateTime;
+	liBlinkStart.HighPart = ftBlinkStart.dwHighDateTime;
+}
+
+void updateStopTime()
+{
+	GetSystemTime(&stBlinkStop);
+	SystemTimeToFileTime(&stBlinkStop, &ftBlinkStop);
+	liBlinkStop.LowPart = ftBlinkStop.dwLowDateTime;
+	liBlinkStop.HighPart = ftBlinkStop.dwHighDateTime;
+}
 
 #pragma region KeypadBlinkThread
 
 void KeypadBlinkStart()
 {
-	if (KeypadBlinkThread == NULL)
-	{
+	if (KeypadBlinkThread == NULL) {
 		ResetEvent(KeypadBlinkThreadEvent);
 		KeypadBlinkThread = CreateThread(NULL, 0, KeypadBlinkThreadStart, NULL, 0, NULL);
 		SetThreadPriority(KeypadBlinkThread, THREAD_PRIORITY_HIGHEST);
@@ -256,8 +443,7 @@ void KeypadBlinkStart()
 
 void KeypadBlinkStop()
 {
-	if (KeypadBlinkThread != NULL)
-	{
+	if (KeypadBlinkThread != NULL) {
 		SetEvent(KeypadBlinkThreadEvent);
 		WaitForSingleObject(KeypadBlinkThread, INFINITE);
 		KeypadBlinkThread = NULL;
@@ -267,17 +453,14 @@ void KeypadBlinkStop()
 DWORD KeypadBlinkThreadStart(LPVOID data)
 {
 	Keypad keypad;
-	if (!keypad.Initialize())
-	{
+	if (!keypad.Initialize()) {
 		MessageBox(NULL, L"Cannot initialize Keypad", L"Error", MB_OK | MB_TOPMOST);
 		return 1;
 	}
 
-	while (true)
-	{
+	while (true) {
 		// Blink for a few times
-		for (int i=0; i < 7; i++)
-		{
+		for (int i=0; i < 7; i++) {
 			keypad.TurnOff();
 			Sleep(75);
 			keypad.TurnOn();
@@ -285,9 +468,12 @@ DWORD KeypadBlinkThreadStart(LPVOID data)
 		}
 		keypad.TurnOff();
 
+		if (timedOut()) {
+			::RegistrySetDWORD(HKEY_LOCAL_MACHINE, TEXT("Software\\LeoExtendedNotifications"), TEXT("_tOut"), notifications+1);
+		}
+
 		// Keep looping until we're instructed to stop the thread
-		if (WaitForSingleObject(KeypadBlinkThreadEvent, 3000) == WAIT_OBJECT_0)
-		{
+		if (WaitForSingleObject(KeypadBlinkThreadEvent, 3000) == WAIT_OBJECT_0) {
 			break;
 		}
 	}
