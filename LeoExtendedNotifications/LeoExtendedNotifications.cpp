@@ -10,11 +10,6 @@
 
 // Change this according to what you want...
 #define LEN_MSGBOX 0
-/*
-#define LEN_NOTIFY_SMS 1
-#define LEN_NOTIFY_EMAIL 1
-#define LEN_NOTIFY_CALLS 1
-*/
 
 void ZeroNotificationChanged();
 void ConfigChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, const UINT cbData);
