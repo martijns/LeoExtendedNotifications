@@ -30,6 +30,14 @@ bool isSyncincOrCharging();
 void updateStartTime();
 void updateStopTime();
 bool getLockStatus();
+void blinkFunky(Keypad keypad);
+void tokenizeBlinkSequence();
+
+DWORD getSMSCount();
+DWORD getMMSCount();
+DWORD getMissedCalls();
+DWORD getMailCount();
+DWORD getVMailCount();
 
 void KeypadBlinkStart();
 void KeypadBlinkStop();
@@ -54,6 +62,10 @@ DWORD notifyByVmail = 1;
 DWORD stopInCall = 1;
 DWORD clearByUnlock = 1;
 DWORD notifications = 0;
+DWORD sleepBetweenBlinks = 3000;
+DWORD blinks[20];
+DWORD blinkSize = 0;
+TCHAR strSeq[100] = { NULL };
 
 HREGNOTIFY hMyNotify;
 HREGNOTIFY hSmsNotify;
@@ -72,21 +84,18 @@ HANDLE appEvent = NULL;
 
 bool bUsingUnattendedMode = false;
 bool isLocked = false;
-//bool dontBlink = true;
 bool timeOut = true;
 
 int _tmain(int argc, _TCHAR* argv[]) {
 	// Create an event for ourselves, so that we can be turned off as well
 	appEvent = CreateEvent(NULL, TRUE, FALSE, L"LedExtendedNotificationsApp");
-	if (appEvent == NULL)
-	{
+	if (appEvent == NULL) {
 		MessageBox(NULL, L"Couldn't create an event for ourselves", L"Error", MB_OK);
 		return 1;
 	}
 
 	// If the app is already running, we set the event so that it will close itself.
-	if (GetLastError() == ERROR_ALREADY_EXISTS)
-	{
+	if (GetLastError() == ERROR_ALREADY_EXISTS) {
 		SetEvent(appEvent);
 		CloseHandle(appEvent);
 		return 1;
@@ -94,8 +103,7 @@ int _tmain(int argc, _TCHAR* argv[]) {
 
 	// Initialize the keypad blink thread event, so we can stop it
 	KeypadBlinkThreadEvent = CreateEvent(NULL, TRUE, FALSE, L"LedExtendedNotificationsApp\\{43D2E54D-461B-4d07-B8DF-2F0947B9FDD8}");
-	if (KeypadBlinkThreadEvent == NULL)
-	{
+	if (KeypadBlinkThreadEvent == NULL) {
 		MessageBox(NULL, L"Fatal error: couldn't create KeypadBlinkThreadEvent", L"Error", MB_OK | MB_TOPMOST);
 		CloseHandle(appEvent);
 		return 1;
@@ -105,8 +113,7 @@ int _tmain(int argc, _TCHAR* argv[]) {
 	createNotifyHooks();
 
 	// Check initial state
-	if (ShouldNotify())
-	{
+	if (ShouldNotify()) {
 		SetUnattended(true);
 		KeypadBlinkStart();
 	}
@@ -121,7 +128,6 @@ int _tmain(int argc, _TCHAR* argv[]) {
 
 	// Wait until signal for exit
 	WaitForSingleObject(appEvent, INFINITE);
-
 	exitProgram();
 
 	return 0;
@@ -136,7 +142,7 @@ void exitProgram() {
 	CloseHandle(KeypadBlinkThreadEvent);
 
 //#if LEN_MSGBOX
-	MessageBox(NULL, L"bye bye!", L"LeoExtendedNotifications v0.6", MB_OK | MB_TOPMOST);
+	MessageBox(NULL, L"bye bye!", L"LeoExtendedNotifications v0.7", MB_OK | MB_TOPMOST);
 //#endif
 }
 
@@ -191,8 +197,7 @@ void createNotifyHooks() {
 	}
 
 	DWORD fakeParam = 1;
-	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_tOut"),
-		NotificationChanged, fakeParam, NULL, &hMyNotify);
+	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_tOut"), NotificationChanged, fakeParam, NULL, &hMyNotify);
 	
 	fakeParam = 2;
 	if (stopInCall == 1) {
@@ -223,7 +228,7 @@ void createNotifyHooks() {
 
 void readConfig() {
 	::RegistrySetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_tOut"), 0x00000000);
-
+	
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SMS"), &notifyBySMS);
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("MMS"), &notifyByMMS);
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("MAIL"), &notifyByMail);
@@ -234,14 +239,41 @@ void readConfig() {
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("UNLOCK"), &clearByUnlock);
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("DURATION"), &blinkTimeOut);
 
+	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("BLINKSLEEP"), &sleepBetweenBlinks);
+	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQ"), (LPTSTR) &strSeq, sizeof(strSeq));
+	tokenizeBlinkSequence();
+
 	isLocked = getLockStatus();
+}
+
+void tokenizeBlinkSequence() {
+	if (strSeq == NULL) {
+		return;
+	}
+
+	wchar_t *token = NULL;
+	wchar_t *delims = L"-";
+
+	DWORD dTok = 0;
+	int i = 0, j = 0;
+	do {
+		token = wcstok(i == 0 ? strSeq : NULL, delims);
+		if (token != NULL) {
+			dTok = _wtol(token);
+			if (dTok == 0) { continue; }
+			
+			blinks[i++] = dTok;
+		}
+	} while (token != NULL && i < 20 && j++ < 40);
+
+	blinkSize = i;
 }
 
 void ConfigChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, const UINT cbData) {
 	readConfig();
 	ZeroNotificationChanged();
 
-	MessageBox(NULL, L"New settings applied!", L"LeoExtendedNotifications v0.6", MB_OK | MB_TOPMOST);
+	MessageBox(NULL, L"New settings applied!", L"LeoExtendedNotifications v0.7", MB_OK | MB_TOPMOST);
 }
 
 void createConfigHook() {
@@ -255,6 +287,8 @@ void createConfigHook() {
 	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("STOP"), ConfigChanged, fakeParam, NULL, &hZeroParam);
 	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("UNLOCK"), ConfigChanged, fakeParam, NULL, &hZeroParam);
 	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("DURATION"), ConfigChanged, fakeParam, NULL, &hZeroParam);
+	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("BLINKSLEEP"), ConfigChanged, fakeParam, NULL, &hZeroParam);
+	//::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQ"), ConfigChanged, fakeParam, NULL, &hZeroParam);
 }
 
 void clearConfigHook() {
@@ -286,6 +320,23 @@ bool IsKeypadLedControlRunning() {
 
 bool ShouldNotify() {
 	notifications = 0;
+	notifications += getSMSCount();
+	notifications += getMMSCount();
+	notifications += getMissedCalls();
+	notifications += getMailCount();
+	notifications += getVMailCount();
+
+	if (blinkTimeOut > 0) {
+		//::RegistrySetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_notifications"), notifications); //DEBUG
+
+		DWORD htOut = 0;
+		::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_tOut"), &htOut);
+		if (notifications == 0) {
+			::RegistrySetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_tOut"), 0x00000000);
+		} else if (htOut == notifications) {
+			return false;
+		}
+	}
 
 	if (stopInCall == 1) {
 		DWORD hIsInCall = 0;
@@ -301,45 +352,57 @@ bool ShouldNotify() {
 		return false;
 	}
 
+	return (notifications > 0);
+}
+
+DWORD getSMSCount() {
 	if (notifyBySMS == 1) {
 		DWORD unreadSms = 0;
 		::RegistryGetDWORD(SN_MESSAGINGSMSUNREAD_ROOT, SN_MESSAGINGSMSUNREAD_PATH, SN_MESSAGINGSMSUNREAD_VALUE, &unreadSms);
-		notifications += unreadSms;
+		return unreadSms;
 	}
 
+	return 0;
+}
+
+DWORD getMMSCount() {
 	if (notifyByMMS == 1) {
 		DWORD unreadMms = 0;
 		::RegistryGetDWORD(SN_MESSAGINGMMSUNREAD_ROOT, SN_MESSAGINGMMSUNREAD_PATH, SN_MESSAGINGMMSUNREAD_VALUE, &unreadMms);
-		notifications += unreadMms;
+		return unreadMms;
 	}
 
+	return 0;
+}
+
+DWORD getMissedCalls() {
 	if (notifyByCall == 1) {
 		DWORD missedCalls = 0;
 		::RegistryGetDWORD(SN_PHONEMISSEDCALLS_ROOT, SN_PHONEMISSEDCALLS_PATH, SN_PHONEMISSEDCALLS_VALUE, &missedCalls);
-			notifications += missedCalls;
+		return missedCalls;
 	}
 
+	return 0;
+}
+
+DWORD getMailCount() {
 	if (notifyByMail == 1) {
 		DWORD unreadEmail = 0;
 		::RegistryGetDWORD(SN_MESSAGINGTOTALEMAILUNREAD_ROOT, SN_MESSAGINGTOTALEMAILUNREAD_PATH, SN_MESSAGINGTOTALEMAILUNREAD_VALUE, &unreadEmail);
-		notifications += unreadEmail;
+		return unreadEmail;
 	}
 
+	return 0;
+}
+
+DWORD getVMailCount() {
 	if (notifyByVmail == 1) {
 		DWORD vMails = 0;
 		::RegistryGetDWORD(SN_MESSAGINGVOICEMAILTOTALUNREAD_ROOT, SN_MESSAGINGVOICEMAILTOTALUNREAD_PATH, SN_MESSAGINGVOICEMAILTOTALUNREAD_VALUE, &vMails);
-		notifications += vMails;
+		return vMails;
 	}
 
-	if (blinkTimeOut > 0) {
-		DWORD htOut = 0;
-		::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_tOut"), &htOut);
-		if (htOut > notifications) {
-			return false;
-		}
-	}
-
-	return (notifications > 0);
+	return 0;
 }
 
 bool timedOut() {
@@ -352,7 +415,7 @@ bool timedOut() {
 		return false;
 	}
 
-	DWORD diff = (liBlinkStop.QuadPart - liBlinkStart.QuadPart) / tDivider;
+	DWORD diff = (DWORD) (liBlinkStop.QuadPart - liBlinkStart.QuadPart) / tDivider;
 	if (diff >= blinkTimeOut) {
 		return true;
 	}
@@ -386,21 +449,6 @@ void LockModeChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, co
 	if (clearByUnlock == 0) {
 		return;
 	}
-
-	/*
-	DWORD lockStatus = 0;
-	::RegistryGetDWORD(SN_LOCK_ROOT, SN_LOCK_PATH, SN_LOCK_VALUE, &lockStatus);
-	if (isLocked && lockStatus == 0) {
-		isLocked = false;
-		//dontBlink = !(isLocked = false);
-		ZeroNotificationChanged();
-
-	} else if (lockStatus == SN_LOCK_BITMASK_KEYLOCKED) {
-		isLocked = true;
-		//dontBlink = !(isLocked = true);
-		ZeroNotificationChanged();
-	}
-	*/
 
 	isLocked = getLockStatus();
 	ZeroNotificationChanged();
@@ -475,25 +523,42 @@ DWORD KeypadBlinkThreadStart(LPVOID data) {
 
 	while (true) {
 		// Blink for a few times
-		for (int i=0; i < 7; i++) {
-			keypad.TurnOff();
-			Sleep(75);
-			keypad.TurnOn();
-			Sleep(75);
-		}
-		keypad.TurnOff();
+		blinkFunky(keypad);
 
 		if (timedOut()) {
-			::RegistrySetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_tOut"), notifications+1);
+			::RegistrySetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_tOut"), notifications);
 		}
 
 		// Keep looping until we're instructed to stop the thread
-		if (WaitForSingleObject(KeypadBlinkThreadEvent, 3000) == WAIT_OBJECT_0) {
+		if (WaitForSingleObject(KeypadBlinkThreadEvent, sleepBetweenBlinks) == WAIT_OBJECT_0) {
 			break;
 		}
 	}
 
 	return 0;
+}
+
+void blinkFunky(Keypad keypad) {
+	if (blinkSize == 0) {
+		for (int i = 0; i < 7; i++) {
+			keypad.TurnOff();
+			Sleep(75);
+			keypad.TurnOn();
+			Sleep(75);
+		}
+	} else {
+		for (int i = 0; i < (int) blinkSize; i++) {
+			if (i % 2 == 0) {
+				keypad.TurnOff();
+			} else {
+				keypad.TurnOn();
+			}
+
+			Sleep(blinks[i]);
+		}
+	}
+
+	keypad.TurnOff();
 }
 
 #pragma endregion // KeypadBlinkThread
