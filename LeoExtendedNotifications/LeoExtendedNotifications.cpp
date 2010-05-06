@@ -8,13 +8,13 @@
 #include <pmpolicy.h>
 #include "keypad.h"
 
+// Own NotifyEntryPoints
+#define SN_REMINDER_ROOT HKEY_LOCAL_MACHINE
+#define SN_REMINDER_PATH TEXT("System\\State\\Reminder\\Count")
+#define SN_REMINDER_VALUE TEXT("APPT")
+
 // Change this according to what you want...
 #define LEN_MSGBOX 0
-/*
-#define LEN_NOTIFY_SMS 1
-#define LEN_NOTIFY_EMAIL 1
-#define LEN_NOTIFY_CALLS 1
-*/
 
 void ZeroNotificationChanged();
 void ConfigChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, const UINT cbData);
@@ -43,6 +43,7 @@ DWORD getMMSCount();
 DWORD getMissedCalls();
 DWORD getMailCount();
 DWORD getVMailCount();
+DWORD getReminderCount();
 
 void KeypadBlinkStart();
 void KeypadBlinkStop();
@@ -64,6 +65,7 @@ DWORD notifyByMMS = 1;
 DWORD notifyByMail = 1;
 DWORD notifyByCall = 1;
 DWORD notifyByVmail = 1;
+DWORD notifyByReminder = 1;
 DWORD stopInCall = 1;
 DWORD clearByUnlock = 1;
 DWORD notifications = 0;
@@ -78,6 +80,7 @@ HREGNOTIFY hMmsNotify;
 HREGNOTIFY hEmailNotify;
 HREGNOTIFY hCallsNotify;
 HREGNOTIFY hVmailNotify;
+HREGNOTIFY hReminderNotify;
 HREGNOTIFY hInCallStatus;
 HREGNOTIFY hkeyLockStatus;
 HREGNOTIFY hASyncStatus;
@@ -147,7 +150,7 @@ void exitProgram() {
 	CloseHandle(KeypadBlinkThreadEvent);
 
 //#if LEN_MSGBOX
-	MessageBox(NULL, L"bye bye!", L"LeoExtendedNotifications v0.7", MB_OK | MB_TOPMOST);
+	MessageBox(NULL, L"bye bye!", L"LeoExtendedNotifications v0.71", MB_OK | MB_TOPMOST);
 //#endif
 }
 
@@ -184,6 +187,10 @@ void clearNotifiyHooks() {
 
 	if (notifyByVmail == 1) {
 		RegistryCloseNotification(hVmailNotify);
+	}
+
+	if (notifyByReminder == 1) {
+		RegistryCloseNotification(hReminderNotify);
 	}
 }
 
@@ -229,6 +236,11 @@ void createNotifyHooks() {
 		::RegistryNotifyCallback(SN_MESSAGINGTOTALEMAILUNREAD_ROOT, SN_MESSAGINGTOTALEMAILUNREAD_PATH, SN_MESSAGINGTOTALEMAILUNREAD_VALUE,
 			NotificationChanged, fakeParam, NULL, &hEmailNotify);
 	}
+
+	if (notifyByReminder == 1) {
+		::RegistryNotifyCallback(SN_REMINDER_ROOT, SN_REMINDER_PATH, SN_REMINDER_VALUE,
+			NotificationChanged, fakeParam, NULL, &hReminderNotify);
+	}
 }
 
 void readConfig() {
@@ -239,6 +251,7 @@ void readConfig() {
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("MAIL"), &notifyByMail);
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("CALL"), &notifyByCall);
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("VMAIL"), &notifyByVmail);
+	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("REMINDER"), &notifyByReminder);
 
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("STOP"), &stopInCall);
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("UNLOCK"), &clearByUnlock);
@@ -278,7 +291,7 @@ void ConfigChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, cons
 	readConfig();
 	ZeroNotificationChanged();
 
-	MessageBox(NULL, L"New settings applied!", L"LeoExtendedNotifications v0.7", MB_OK | MB_TOPMOST);
+	MessageBox(NULL, L"New settings applied!", L"LeoExtendedNotifications v0.71", MB_OK | MB_TOPMOST);
 }
 
 void createConfigHook() {
@@ -289,6 +302,7 @@ void createConfigHook() {
 	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("MAIL"), ConfigChanged, fakeParam, NULL, &hZeroParam);
 	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("CALL"), ConfigChanged, fakeParam, NULL, &hZeroParam);
 	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("VMAIL"), ConfigChanged, fakeParam, NULL, &hZeroParam);
+	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("REMINDER"), ConfigChanged, fakeParam, NULL, &hZeroParam);
 	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("STOP"), ConfigChanged, fakeParam, NULL, &hZeroParam);
 	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("UNLOCK"), ConfigChanged, fakeParam, NULL, &hZeroParam);
 	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("DURATION"), ConfigChanged, fakeParam, NULL, &hZeroParam);
@@ -330,6 +344,7 @@ bool ShouldNotify() {
 	notifications += getMissedCalls();
 	notifications += getMailCount();
 	notifications += getVMailCount();
+	notifications += getReminderCount();
 
 	if (blinkTimeOut > 0) {
 		//::RegistrySetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_notifications"), notifications); //DEBUG
@@ -405,6 +420,16 @@ DWORD getVMailCount() {
 		DWORD vMails = 0;
 		::RegistryGetDWORD(SN_MESSAGINGVOICEMAILTOTALUNREAD_ROOT, SN_MESSAGINGVOICEMAILTOTALUNREAD_PATH, SN_MESSAGINGVOICEMAILTOTALUNREAD_VALUE, &vMails);
 		return vMails;
+	}
+
+	return 0;
+}
+
+DWORD getReminderCount() {
+	if (notifyByReminder == 1) {
+		DWORD rems = 0;
+		::RegistryGetDWORD(SN_REMINDER_ROOT, SN_REMINDER_PATH, SN_REMINDER_VALUE, &rems);
+		return rems;
 	}
 
 	return 0;
