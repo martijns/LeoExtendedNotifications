@@ -7,6 +7,9 @@
 #include <snapi.h>
 #include <pmpolicy.h>
 #include "keypad.h"
+#include "MessageBoxTimed.h"
+
+#define VERSION L"LeoExtendedNotifications v0.71"
 
 // Own NotifyEntryPoints
 #define SN_REMINDER_ROOT HKEY_LOCAL_MACHINE
@@ -98,7 +101,7 @@ int _tmain(int argc, _TCHAR* argv[]) {
 	// Create an event for ourselves, so that we can be turned off as well
 	appEvent = CreateEvent(NULL, TRUE, FALSE, L"LedExtendedNotificationsApp");
 	if (appEvent == NULL) {
-		MessageBox(NULL, L"Couldn't create an event for ourselves", L"Error", MB_OK);
+		MessageBox(NULL, L"Couldn't create an event for ourselves", VERSION, MB_OK | MB_TOPMOST);
 		return 1;
 	}
 
@@ -112,7 +115,7 @@ int _tmain(int argc, _TCHAR* argv[]) {
 	// Initialize the keypad blink thread event, so we can stop it
 	KeypadBlinkThreadEvent = CreateEvent(NULL, TRUE, FALSE, L"LedExtendedNotificationsApp\\{43D2E54D-461B-4d07-B8DF-2F0947B9FDD8}");
 	if (KeypadBlinkThreadEvent == NULL) {
-		MessageBox(NULL, L"Fatal error: couldn't create KeypadBlinkThreadEvent", L"Error", MB_OK | MB_TOPMOST);
+		MessageBox(NULL, L"Fatal error: couldn't create KeypadBlinkThreadEvent", VERSION, MB_OK | MB_TOPMOST);
 		CloseHandle(appEvent);
 		return 1;
 	}
@@ -125,14 +128,6 @@ int _tmain(int argc, _TCHAR* argv[]) {
 		SetUnattended(true);
 		KeypadBlinkStart();
 	}
-
-#if LEN_MSGBOX
-	if (IsKeypadLedControlRunning()) {
-		MessageBox(NULL, L"You have KeypadLedControl running as well. It will work, but you may get some strange blinking behaviour while there are notifications.", L"Warning", MB_OK | MB_TOPMOST);
-	}
-
-	MessageBox(NULL, L"LeoExtendedNotifications started", L"Info", MB_OK | MB_TOPMOST);
-#endif
 
 	// Wait until signal for exit
 	WaitForSingleObject(appEvent, INFINITE);
@@ -149,9 +144,8 @@ void exitProgram() {
 	CloseHandle(appEvent);
 	CloseHandle(KeypadBlinkThreadEvent);
 
-//#if LEN_MSGBOX
-	MessageBox(NULL, L"bye bye!", L"LeoExtendedNotifications v0.71", MB_OK | MB_TOPMOST);
-//#endif
+	MessageBoxTimed msgBox;
+	msgBox.Show(NULL, L"Closing!", VERSION, MB_OK | MB_TOPMOST, 1000);
 }
 
 void clearNotifiyHooks() {
@@ -291,7 +285,8 @@ void ConfigChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, cons
 	readConfig();
 	ZeroNotificationChanged();
 
-	MessageBox(NULL, L"New settings applied!", L"LeoExtendedNotifications v0.71", MB_OK | MB_TOPMOST);
+	MessageBoxTimed msgbox;
+	msgbox.Show(NULL, L"New settings applied!", VERSION, MB_OK | MB_TOPMOST, 500);
 }
 
 void createConfigHook() {
@@ -547,7 +542,7 @@ void KeypadBlinkStop() {
 DWORD KeypadBlinkThreadStart(LPVOID data) {
 	Keypad keypad;
 	if (!keypad.Initialize()) {
-		MessageBox(NULL, L"Cannot initialize Keypad", L"Error", MB_OK | MB_TOPMOST);
+		MessageBox(NULL, L"Cannot initialize Keypad", VERSION, MB_OK | MB_TOPMOST);
 		return 1;
 	}
 

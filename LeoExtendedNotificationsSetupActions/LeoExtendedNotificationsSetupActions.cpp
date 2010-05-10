@@ -32,7 +32,7 @@ bool CloseLeoExtendedNotificationsApp(void)
 		CloseHandle(appEvent);
 
 		// Wait a second to allow the app to exit.
-		Sleep(1000);
+		Sleep(2000);
 	}
 	else
 	{
