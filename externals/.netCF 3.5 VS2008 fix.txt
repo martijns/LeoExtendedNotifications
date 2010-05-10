@@ -1,0 +1,31 @@
+SenseSDK is a .netCF 3.5 assembly!!!!
+It will not work in 2.0...
+
+For designtime... 
+
+1)
+
+The metadata assembly (StedySoft.SenseSDK.PocketPC.asmmeta.dll) MUST be added to the "designer metadata" directory. 
+
+For CF 3.5, this directory would be the following...
+
+C:\Program Files\Microsoft.NET\SDK\CompactFramework\v3.5\Wind owsCE\DesignerMetadata
+
+This should allow the dependency to the StedySoft.SenseSDK.PocketPC.asmmeta.dll assembly to be found.
+
+
+2)
+
+Create a new tab in VS2008 toolbox... then right click and add the SDK (browse to the StedySoft.SenseSDK.dll)
+
+If the controls do not show in VS2008 toolbox, try:
+
+cmd /c start /wait devenv /setup /resetuserdata /selfreg /resetskippkgs
+
+from the command prompt to reser all user settings. 
+
+See https://connect.microsoft.com/VisualStudio/feedback/ViewFeedback.aspx?FeedbackID=322223&wa=wsignin1.0 for discussion. 
+
+
+
+NOTE: Sometimes I added the controls with a form open with SenseSDK controls on it... it failed, but after deleteing the tab and recreating without the form open it worked.
