@@ -165,6 +165,7 @@ namespace LeoExtendedNotificationsGUI
             list.AddItem(itemMms, true);
             list.AddItem(itemEmail, true);
             list.AddItem(itemVmail, true);
+            list.AddItem(itemReminder, true);
             list.AddItem(divBehaviour, true);
             list.AddItem(itemStopDuringCall, true);
             list.AddItem(itemStopAfterUnlock, true);
