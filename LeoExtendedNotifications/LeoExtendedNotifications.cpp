@@ -9,12 +9,14 @@
 #include "keypad.h"
 #include "MessageBoxTimed.h"
 
-#define VERSION L"LeoExtendedNotifications v0.71"
+#define VERSION L"LeoExtendedNotifications v0.8"
 
 // Own NotifyEntryPoints
 #define SN_REMINDER_ROOT HKEY_LOCAL_MACHINE
 #define SN_REMINDER_PATH TEXT("System\\State\\Reminder\\Count")
 #define SN_REMINDER_VALUE TEXT("APPT")
+
+#define SEQ_TYPES 7
 
 // Change this according to what you want...
 #define LEN_MSGBOX 0
@@ -40,6 +42,17 @@ void updateStopTime();
 bool getLockStatus();
 void blinkFunky(Keypad keypad);
 void tokenizeBlinkSequence();
+void setBlinkType(int i);
+
+// blinkTypes
+const int SEQ_UNSET = -1;
+const int SEQ_MASTER = 0;
+const int SEQ_SMS = 1;
+const int SEQ_MMS = 2;
+const int SEQ_CALL = 3;
+const int SEQ_MAIL = 4;
+const int SEQ_VMAIL = 5;
+const int SEQ_REMINDER = 6;
 
 DWORD getSMSCount();
 DWORD getMMSCount();
@@ -73,9 +86,10 @@ DWORD stopInCall = 1;
 DWORD clearByUnlock = 1;
 DWORD notifications = 0;
 DWORD sleepBetweenBlinks = 3000;
-DWORD blinks[20];
-DWORD blinkSize = 0;
-TCHAR strSeq[100] = { NULL };
+DWORD blinks[SEQ_TYPES][20] = { 0 };
+DWORD blinkSize[SEQ_TYPES] = { 0 };
+TCHAR strSeq[SEQ_TYPES][100] = { NULL };
+int blinkType = SEQ_UNSET;
 
 HREGNOTIFY hMyNotify;
 HREGNOTIFY hSmsNotify;
@@ -252,7 +266,13 @@ void readConfig() {
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("DURATION"), &blinkTimeOut);
 
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("BLINKSLEEP"), &sleepBetweenBlinks);
-	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQ"), (LPTSTR) &strSeq, sizeof(strSeq));
+	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQ"), (LPTSTR) &strSeq[0], sizeof(strSeq[0]));
+	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQsms"), (LPTSTR) &strSeq[1], sizeof(strSeq[1]));
+	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQmms"), (LPTSTR) &strSeq[2], sizeof(strSeq[2]));
+	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQcall"), (LPTSTR) &strSeq[3], sizeof(strSeq[3]));
+	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQmail"), (LPTSTR) &strSeq[4], sizeof(strSeq[4]));
+	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQvmail"), (LPTSTR) &strSeq[5], sizeof(strSeq[5]));
+	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQrem"), (LPTSTR) &strSeq[6], sizeof(strSeq[6]));
 	tokenizeBlinkSequence();
 
 	isLocked = getLockStatus();
@@ -263,22 +283,27 @@ void tokenizeBlinkSequence() {
 		return;
 	}
 
-	wchar_t *token = NULL;
 	wchar_t *delims = L"-";
-
-	DWORD dTok = 0;
-	int i = 0, j = 0;
-	do {
-		token = wcstok(i == 0 ? strSeq : NULL, delims);
-		if (token != NULL) {
-			dTok = _wtol(token);
-			if (dTok == 0) { continue; }
-			
-			blinks[i++] = dTok;
+	for (int s = 0; s < SEQ_TYPES; s++) {
+		if (strSeq[s] == NULL) {
+			continue;
 		}
-	} while (token != NULL && i < 20 && j++ < 40);
 
-	blinkSize = i;
+		wchar_t *token = NULL;
+		DWORD dTok = 0;
+		int i = 0, j = 0;
+		do {
+			token = wcstok(i == 0 ? strSeq[s] : NULL, delims);
+			if (token != NULL) {
+				dTok = _wtol(token);
+				if (dTok == 0) { continue; }
+				
+				blinks[s][i++] = dTok;
+			}
+		} while (token != NULL && i < 20 && j++ < 40);
+
+		blinkSize[s] = i;
+	}
 }
 
 void ConfigChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, const UINT cbData) {
@@ -333,6 +358,8 @@ bool IsKeypadLedControlRunning() {
 }
 
 bool ShouldNotify() {
+	setBlinkType(SEQ_UNSET);
+
 	notifications = 0;
 	notifications += getSMSCount();
 	notifications += getMMSCount();
@@ -370,11 +397,17 @@ bool ShouldNotify() {
 	return (notifications > 0);
 }
 
+void setBlinkType(int i) {
+	blinkType = (blinkType == SEQ_UNSET || i == SEQ_UNSET ? i : SEQ_MASTER);
+}
+
 DWORD getSMSCount() {
 	if (notifyBySMS == 1) {
-		DWORD unreadSms = 0;
-		::RegistryGetDWORD(SN_MESSAGINGSMSUNREAD_ROOT, SN_MESSAGINGSMSUNREAD_PATH, SN_MESSAGINGSMSUNREAD_VALUE, &unreadSms);
-		return unreadSms;
+		DWORD returnVal = 0;
+		::RegistryGetDWORD(SN_MESSAGINGSMSUNREAD_ROOT, SN_MESSAGINGSMSUNREAD_PATH, SN_MESSAGINGSMSUNREAD_VALUE, &returnVal);
+		if (returnVal > 0 ) { setBlinkType(SEQ_SMS); }
+
+		return returnVal;
 	}
 
 	return 0;
@@ -382,9 +415,11 @@ DWORD getSMSCount() {
 
 DWORD getMMSCount() {
 	if (notifyByMMS == 1) {
-		DWORD unreadMms = 0;
-		::RegistryGetDWORD(SN_MESSAGINGMMSUNREAD_ROOT, SN_MESSAGINGMMSUNREAD_PATH, SN_MESSAGINGMMSUNREAD_VALUE, &unreadMms);
-		return unreadMms;
+		DWORD returnVal = 0;
+		::RegistryGetDWORD(SN_MESSAGINGMMSUNREAD_ROOT, SN_MESSAGINGMMSUNREAD_PATH, SN_MESSAGINGMMSUNREAD_VALUE, &returnVal);
+		if (returnVal > 0 ) { setBlinkType(SEQ_MMS); }
+
+		return returnVal;
 	}
 
 	return 0;
@@ -392,9 +427,11 @@ DWORD getMMSCount() {
 
 DWORD getMissedCalls() {
 	if (notifyByCall == 1) {
-		DWORD missedCalls = 0;
-		::RegistryGetDWORD(SN_PHONEMISSEDCALLS_ROOT, SN_PHONEMISSEDCALLS_PATH, SN_PHONEMISSEDCALLS_VALUE, &missedCalls);
-		return missedCalls;
+		DWORD returnVal = 0;
+		::RegistryGetDWORD(SN_PHONEMISSEDCALLS_ROOT, SN_PHONEMISSEDCALLS_PATH, SN_PHONEMISSEDCALLS_VALUE, &returnVal);
+		if (returnVal > 0 ) { setBlinkType(SEQ_CALL); }
+
+		return returnVal;
 	}
 
 	return 0;
@@ -402,9 +439,11 @@ DWORD getMissedCalls() {
 
 DWORD getMailCount() {
 	if (notifyByMail == 1) {
-		DWORD unreadEmail = 0;
-		::RegistryGetDWORD(SN_MESSAGINGTOTALEMAILUNREAD_ROOT, SN_MESSAGINGTOTALEMAILUNREAD_PATH, SN_MESSAGINGTOTALEMAILUNREAD_VALUE, &unreadEmail);
-		return unreadEmail;
+		DWORD returnVal = 0;
+		::RegistryGetDWORD(SN_MESSAGINGTOTALEMAILUNREAD_ROOT, SN_MESSAGINGTOTALEMAILUNREAD_PATH, SN_MESSAGINGTOTALEMAILUNREAD_VALUE, &returnVal);
+		if (returnVal > 0 ) { setBlinkType(SEQ_MAIL); }
+
+		return returnVal;
 	}
 
 	return 0;
@@ -412,9 +451,11 @@ DWORD getMailCount() {
 
 DWORD getVMailCount() {
 	if (notifyByVmail == 1) {
-		DWORD vMails = 0;
-		::RegistryGetDWORD(SN_MESSAGINGVOICEMAILTOTALUNREAD_ROOT, SN_MESSAGINGVOICEMAILTOTALUNREAD_PATH, SN_MESSAGINGVOICEMAILTOTALUNREAD_VALUE, &vMails);
-		return vMails;
+		DWORD returnVal = 0;
+		::RegistryGetDWORD(SN_MESSAGINGVOICEMAILTOTALUNREAD_ROOT, SN_MESSAGINGVOICEMAILTOTALUNREAD_PATH, SN_MESSAGINGVOICEMAILTOTALUNREAD_VALUE, &returnVal);
+		if (returnVal > 0 ) { setBlinkType(SEQ_VMAIL); }
+
+		return returnVal;
 	}
 
 	return 0;
@@ -422,9 +463,11 @@ DWORD getVMailCount() {
 
 DWORD getReminderCount() {
 	if (notifyByReminder == 1) {
-		DWORD rems = 0;
-		::RegistryGetDWORD(SN_REMINDER_ROOT, SN_REMINDER_PATH, SN_REMINDER_VALUE, &rems);
-		return rems;
+		DWORD returnVal = 0;
+		::RegistryGetDWORD(SN_REMINDER_ROOT, SN_REMINDER_PATH, SN_REMINDER_VALUE, &returnVal);
+		if (returnVal > 0 ) { setBlinkType(SEQ_REMINDER); }
+
+		return returnVal;
 	}
 
 	return 0;
@@ -564,7 +607,7 @@ DWORD KeypadBlinkThreadStart(LPVOID data) {
 }
 
 void blinkFunky(Keypad keypad) {
-	if (blinkSize == 0) {
+	if (blinkSize[SEQ_MASTER] == 0 && blinkSize[blinkType] == 0) {
 		for (int i = 0; i < 7; i++) {
 			keypad.TurnOff();
 			Sleep(75);
@@ -572,14 +615,15 @@ void blinkFunky(Keypad keypad) {
 			Sleep(75);
 		}
 	} else {
-		for (int i = 0; i < (int) blinkSize; i++) {
+
+		for (int i = 0; i < (int) blinkSize[blinkType]; i++) {
 			if (i % 2 == 0) {
 				keypad.TurnOff();
 			} else {
 				keypad.TurnOn();
 			}
 
-			Sleep(blinks[i]);
+			Sleep(blinks[blinkType][i]);
 		}
 	}
 
