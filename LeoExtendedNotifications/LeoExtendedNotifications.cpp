@@ -9,7 +9,7 @@
 #include "keypad.h"
 #include "MessageBoxTimed.h"
 
-#define VERSION L"LeoExtendedNotifications v0.8"
+#define VERSION L"LeoExtendedNotifications v0.9"
 
 // Own NotifyEntryPoints
 #define SN_REMINDER_ROOT HKEY_LOCAL_MACHINE
