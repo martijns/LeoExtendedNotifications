@@ -300,7 +300,6 @@ void readSeq(int type) {
 	if (hRes != S_OK) { blinkSize[type] = SEQ_UNSET; }
 
 #if DEBUG
-	::RegistrySetDWORD(HKEY_LOCAL_MACHINE, debugRegPath, TEXT("_test"), 0x00000010);
 	::RegistrySetDWORD(HKEY_LOCAL_MACHINE, debugRegPath, STR_SEQ_KEYS[type], blinkSize[type]);
 #endif
 }
@@ -324,7 +323,7 @@ void tokenizeBlinkSequence() {
 			if (token != NULL) {
 				size += sizeof(token)+1;
 				if (size >= SEQSIZE) {
-					continue;
+					break;
 				}
 
 				dTok = _wtol(token);
