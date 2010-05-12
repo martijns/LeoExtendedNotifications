@@ -9,17 +9,42 @@
 #include "keypad.h"
 #include "MessageBoxTimed.h"
 
-#define VERSION L"LeoExtendedNotifications v0.9"
+#define VERSION L"LeoExtendedNotifications v0.91"
 
-// Own NotifyEntryPoints
+// Change this according to what you want...
+#define LEN_MSGBOX 0
+
+// own NotifyEntryPoints
 #define SN_REMINDER_ROOT HKEY_LOCAL_MACHINE
 #define SN_REMINDER_PATH TEXT("System\\State\\Reminder\\Count")
 #define SN_REMINDER_VALUE TEXT("APPT")
 
-#define SEQ_TYPES 7
+// Application Settings
+const LPCTSTR appRegPath = TEXT("Software\\LeoExtendedNotifications");
+#if DEBUG
+const LPCTSTR debugRegPath = TEXT("Software\\LeoExtendedNotifications\\debug");
+#endif
 
-// Change this according to what you want...
-#define LEN_MSGBOX 0
+// blinkTypes
+#define SEQ_TYPES 7
+const int SEQ_UNSET = -1;
+const int SEQ_MASTER = 0;
+const int SEQ_SMS = 1;
+const int SEQ_MMS = 2;
+const int SEQ_CALL = 3;
+const int SEQ_MAIL = 4;
+const int SEQ_VMAIL = 5;
+const int SEQ_REMINDER = 6;
+const TCHAR STR_SEQ_KEYS[SEQ_TYPES][10] = {
+	L"SEQ",
+	L"SEQsms",
+	L"SEQmms",
+	L"SEQcall",
+	L"SEQmail",
+	L"SEQvmail",
+	L"SEQrem"
+};
+const int SEQSIZE = 100;
 
 void ZeroNotificationChanged();
 void ConfigChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, const UINT cbData);
@@ -43,16 +68,7 @@ bool getLockStatus();
 void blinkFunky(Keypad keypad);
 void tokenizeBlinkSequence();
 void setBlinkType(int i);
-
-// blinkTypes
-const int SEQ_UNSET = -1;
-const int SEQ_MASTER = 0;
-const int SEQ_SMS = 1;
-const int SEQ_MMS = 2;
-const int SEQ_CALL = 3;
-const int SEQ_MAIL = 4;
-const int SEQ_VMAIL = 5;
-const int SEQ_REMINDER = 6;
+void readSeq(int type);
 
 DWORD getSMSCount();
 DWORD getMMSCount();
@@ -71,7 +87,6 @@ SYSTEMTIME stBlinkStart, stBlinkStop;
 FILETIME ftBlinkStart, ftBlinkStop;
 LARGE_INTEGER liBlinkStart, liBlinkStop;
 const int tDivider = 10000000;
-const LPCTSTR appRegPath = TEXT("Software\\LeoExtendedNotifications");
 
 DWORD blinkTimeOut = 300;
 DWORD timeOutCount = 1;
@@ -83,13 +98,14 @@ DWORD notifyByCall = 1;
 DWORD notifyByVmail = 1;
 DWORD notifyByReminder = 1;
 DWORD stopInCall = 1;
-DWORD clearByUnlock = 1;
+DWORD clearByUnlock = 0;
 DWORD notifications = 0;
 DWORD sleepBetweenBlinks = 3000;
-DWORD blinks[SEQ_TYPES][20] = { 0 };
-DWORD blinkSize[SEQ_TYPES] = { 0 };
-TCHAR strSeq[SEQ_TYPES][100] = { NULL };
+
 int blinkType = SEQ_UNSET;
+int blinkSize[SEQ_TYPES] = { 0 };
+DWORD blinks[SEQ_TYPES][20] = { 0 };
+TCHAR strSeq[SEQ_TYPES][SEQSIZE] = { NULL };
 
 HREGNOTIFY hMyNotify;
 HREGNOTIFY hSmsNotify;
@@ -109,7 +125,7 @@ HANDLE appEvent = NULL;
 
 bool bUsingUnattendedMode = false;
 bool isLocked = false;
-bool timeOut = true;
+bool timeOut = false;
 
 int _tmain(int argc, _TCHAR* argv[]) {
 	// Create an event for ourselves, so that we can be turned off as well
@@ -266,16 +282,27 @@ void readConfig() {
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("DURATION"), &blinkTimeOut);
 
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("BLINKSLEEP"), &sleepBetweenBlinks);
-	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQ"), (LPTSTR) &strSeq[0], sizeof(strSeq[0]));
-	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQsms"), (LPTSTR) &strSeq[1], sizeof(strSeq[1]));
-	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQmms"), (LPTSTR) &strSeq[2], sizeof(strSeq[2]));
-	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQcall"), (LPTSTR) &strSeq[3], sizeof(strSeq[3]));
-	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQmail"), (LPTSTR) &strSeq[4], sizeof(strSeq[4]));
-	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQvmail"), (LPTSTR) &strSeq[5], sizeof(strSeq[5]));
-	::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SEQrem"), (LPTSTR) &strSeq[6], sizeof(strSeq[6]));
+
+	readSeq(SEQ_MASTER);
+	readSeq(SEQ_SMS);
+	readSeq(SEQ_MMS);
+	readSeq(SEQ_CALL);
+	readSeq(SEQ_MAIL);
+	readSeq(SEQ_VMAIL);
+	readSeq(SEQ_REMINDER);
 	tokenizeBlinkSequence();
 
 	isLocked = getLockStatus();
+}
+
+void readSeq(int type) {
+	HRESULT hRes = ::RegistryGetString(HKEY_LOCAL_MACHINE, appRegPath, STR_SEQ_KEYS[type], (LPTSTR) &strSeq[type], SEQSIZE);
+	if (hRes != S_OK) { blinkSize[type] = SEQ_UNSET; }
+
+#if DEBUG
+	::RegistrySetDWORD(HKEY_LOCAL_MACHINE, debugRegPath, TEXT("_test"), 0x00000010);
+	::RegistrySetDWORD(HKEY_LOCAL_MACHINE, debugRegPath, STR_SEQ_KEYS[type], blinkSize[type]);
+#endif
 }
 
 void tokenizeBlinkSequence() {
@@ -284,25 +311,35 @@ void tokenizeBlinkSequence() {
 	}
 
 	wchar_t *delims = L"-";
-	for (int s = 0; s < SEQ_TYPES; s++) {
-		if (strSeq[s] == NULL) {
+	for (int type = 0; type < SEQ_TYPES; type++) {
+		if (strSeq[type] == NULL || blinkSize[type] < 0) {
 			continue;
 		}
 
 		wchar_t *token = NULL;
 		DWORD dTok = 0;
-		int i = 0, j = 0;
+		int i = 0, j = 0, size = 0;
 		do {
-			token = wcstok(i == 0 ? strSeq[s] : NULL, delims);
+			token = wcstok(i == 0 ? strSeq[type] : NULL, delims);
 			if (token != NULL) {
+				size += sizeof(token)+1;
+				if (size >= SEQSIZE) {
+					continue;
+				}
+
 				dTok = _wtol(token);
 				if (dTok == 0) { continue; }
 				
-				blinks[s][i++] = dTok;
+				blinks[type][i++] = dTok;
 			}
 		} while (token != NULL && i < 20 && j++ < 40);
-
-		blinkSize[s] = i;
+		
+		if (i > 0) {
+			blinkSize[type] = i;
+#if DEBUG
+			::RegistrySetDWORD(HKEY_LOCAL_MACHINE, debugRegPath, STR_SEQ_KEYS[type], blinkSize[type]);
+#endif
+		}
 	}
 }
 
@@ -369,7 +406,9 @@ bool ShouldNotify() {
 	notifications += getReminderCount();
 
 	if (blinkTimeOut > 0) {
-		//::RegistrySetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_notifications"), notifications); //DEBUG
+#if DEBUG
+		::RegistrySetDWORD(HKEY_LOCAL_MACHINE, debugRegPath, TEXT("_notifications"), notifications);
+#endif
 
 		DWORD htOut = 0;
 		::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_tOut"), &htOut);
@@ -607,25 +646,32 @@ DWORD KeypadBlinkThreadStart(LPVOID data) {
 }
 
 void blinkFunky(Keypad keypad) {
-	if (blinkSize[SEQ_MASTER] == 0 && blinkSize[blinkType] == 0) {
-		for (int i = 0; i < 7; i++) {
-			keypad.TurnOff();
-			Sleep(75);
-			keypad.TurnOn();
-			Sleep(75);
-		}
-	} else {
+	int type = (blinkSize[blinkType] != SEQ_UNSET ? blinkType : SEQ_MASTER);
+	if (type != SEQ_UNSET) {
+		for (int i = 0; i < blinkSize[type]; i++) {
+			int slTime = blinks[type][i];
+			if (slTime == 0) {
+				continue;
+			}
 
-		for (int i = 0; i < (int) blinkSize[blinkType]; i++) {
 			if (i % 2 == 0) {
 				keypad.TurnOff();
 			} else {
 				keypad.TurnOn();
 			}
 
-			Sleep(blinks[blinkType][i]);
+			Sleep(slTime);
+		}
+
+	} else {
+		for (int i = 0; i < 7; i++) {
+			keypad.TurnOff();
+			Sleep(75);
+			keypad.TurnOn();
+			Sleep(75);
 		}
 	}
+
 
 	keypad.TurnOff();
 }
