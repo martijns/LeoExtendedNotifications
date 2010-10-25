@@ -9,7 +9,7 @@
 #include "keypad.h"
 #include "MessageBoxTimed.h"
 
-#define VERSION L"LeoExtendedNotifications v0.91"
+#define VERSION L"LeoExtendedNotifications v0.92"
 
 // Change this according to what you want...
 #define LEN_MSGBOX 0
@@ -88,7 +88,7 @@ FILETIME ftBlinkStart, ftBlinkStop;
 LARGE_INTEGER liBlinkStart, liBlinkStop;
 const int tDivider = 10000000;
 
-DWORD blinkTimeOut = 300;
+DWORD blinkTimeOut = NULL;
 DWORD timeOutCount = 1;
 
 DWORD notifyBySMS = 1;
@@ -107,6 +107,8 @@ int blinkSize[SEQ_TYPES] = { 0 };
 DWORD blinks[SEQ_TYPES][20] = { 0 };
 TCHAR strSeq[SEQ_TYPES][SEQSIZE] = { NULL };
 
+DWORD fakeParam_tOut = 1;
+DWORD fakeParam_notify = 2;
 HREGNOTIFY hMyNotify;
 HREGNOTIFY hSmsNotify;
 HREGNOTIFY hMmsNotify;
@@ -125,7 +127,7 @@ HANDLE appEvent = NULL;
 
 bool bUsingUnattendedMode = false;
 bool isLocked = false;
-bool timeOut = false;
+//bool timeOut = false;
 
 int _tmain(int argc, _TCHAR* argv[]) {
 	// Create an event for ourselves, so that we can be turned off as well
@@ -185,37 +187,14 @@ void clearNotifiyHooks() {
 	RegistryCloseNotification(hASyncStatus);
 	RegistryCloseNotification(hPowertStatus);
 
-	if (clearByUnlock == 1) {
-		RegistryCloseNotification(hkeyLockStatus);
-	}
-
-	if (stopInCall == 1) {
-		RegistryCloseNotification(hInCallStatus);
-	}
-	
-	if (notifyBySMS == 1) {
-		RegistryCloseNotification(hSmsNotify);
-	}
-
-	if (notifyByMMS == 1) {
-		RegistryCloseNotification(hMmsNotify);
-	}
-
-	if (notifyByCall == 1) {
-		RegistryCloseNotification(hCallsNotify);
-	}
-
-	if (notifyByMail == 1) {
-		RegistryCloseNotification(hEmailNotify);
-	}
-
-	if (notifyByVmail == 1) {
-		RegistryCloseNotification(hVmailNotify);
-	}
-
-	if (notifyByReminder == 1) {
-		RegistryCloseNotification(hReminderNotify);
-	}
+	if (clearByUnlock == 1)    { RegistryCloseNotification(hkeyLockStatus); }
+	if (stopInCall == 1)       { RegistryCloseNotification(hInCallStatus); }
+	if (notifyBySMS == 1)      { RegistryCloseNotification(hSmsNotify); }
+	if (notifyByMMS == 1)      { RegistryCloseNotification(hMmsNotify); }
+	if (notifyByCall == 1)     { RegistryCloseNotification(hCallsNotify); }
+	if (notifyByMail == 1)     { RegistryCloseNotification(hEmailNotify); }
+	if (notifyByVmail == 1)    { RegistryCloseNotification(hVmailNotify); }
+	if (notifyByReminder == 1) { RegistryCloseNotification(hReminderNotify); }
 }
 
 void createNotifyHooks() {
@@ -232,44 +211,42 @@ void createNotifyHooks() {
 		::RegistryNotifyCallback(SN_LOCK_ROOT, SN_LOCK_PATH, SN_LOCK_VALUE, LockModeChanged, 0, NULL, &hkeyLockStatus);
 	}
 
-	DWORD fakeParam = 1;
-	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_tOut"), NotificationChanged, fakeParam, NULL, &hMyNotify);
-	
-	fakeParam = 2;
+	::RegistryNotifyCallback(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_tOut"), NotificationChanged, fakeParam_tOut, NULL, &hMyNotify);
+
 	if (stopInCall == 1) {
 		::RegistryNotifyCallback(SN_PHONEACTIVECALLCOUNT_ROOT, SN_PHONEACTIVECALLCOUNT_PATH, SN_PHONEACTIVECALLCOUNT_VALUE,
-			NotificationChanged, fakeParam, NULL, &hInCallStatus);
+			NotificationChanged, fakeParam_notify, NULL, &hInCallStatus);
 	}
 
 	if (notifyBySMS == 1) {
 		::RegistryNotifyCallback(SN_MESSAGINGSMSUNREAD_ROOT, SN_MESSAGINGSMSUNREAD_PATH, SN_MESSAGINGSMSUNREAD_VALUE,
-			NotificationChanged, fakeParam, NULL, &hSmsNotify);
+			NotificationChanged, fakeParam_notify, NULL, &hSmsNotify);
 	}
 
 	if (notifyByMMS == 1) {
 		::RegistryNotifyCallback(SN_MESSAGINGMMSUNREAD_ROOT, SN_MESSAGINGMMSUNREAD_PATH, SN_MESSAGINGMMSUNREAD_VALUE,
-			NotificationChanged, fakeParam, NULL, &hMmsNotify);
+			NotificationChanged, fakeParam_notify, NULL, &hMmsNotify);
 	}
 
 	if (notifyByCall == 1) {
 		::RegistryNotifyCallback(SN_PHONEMISSEDCALLS_ROOT, SN_PHONEMISSEDCALLS_PATH, SN_PHONEMISSEDCALLS_VALUE,
-			NotificationChanged, fakeParam, NULL, &hCallsNotify);
+			NotificationChanged, fakeParam_notify, NULL, &hCallsNotify);
 	}
 
 	if (notifyByMail == 1) {
 		::RegistryNotifyCallback(SN_MESSAGINGTOTALEMAILUNREAD_ROOT, SN_MESSAGINGTOTALEMAILUNREAD_PATH, SN_MESSAGINGTOTALEMAILUNREAD_VALUE,
-			NotificationChanged, fakeParam, NULL, &hEmailNotify);
+			NotificationChanged, fakeParam_notify, NULL, &hEmailNotify);
 	}
 
 	if (notifyByReminder == 1) {
 		::RegistryNotifyCallback(SN_REMINDER_ROOT, SN_REMINDER_PATH, SN_REMINDER_VALUE,
-			NotificationChanged, fakeParam, NULL, &hReminderNotify);
+			NotificationChanged, fakeParam_notify, NULL, &hReminderNotify);
 	}
 }
 
 void readConfig() {
 	::RegistrySetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_tOut"), 0x00000000);
-	
+
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("SMS"), &notifyBySMS);
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("MMS"), &notifyByMMS);
 	::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("MAIL"), &notifyByMail);
@@ -328,11 +305,11 @@ void tokenizeBlinkSequence() {
 
 				dTok = _wtol(token);
 				if (dTok == 0) { continue; }
-				
+
 				blinks[type][i++] = dTok;
 			}
 		} while (token != NULL && i < 20 && j++ < 40);
-		
+
 		if (i > 0) {
 			blinkSize[type] = i;
 #if DEBUG
@@ -404,11 +381,10 @@ bool ShouldNotify() {
 	notifications += getVMailCount();
 	notifications += getReminderCount();
 
-	if (blinkTimeOut > 0) {
 #if DEBUG
 		::RegistrySetDWORD(HKEY_LOCAL_MACHINE, debugRegPath, TEXT("_notifications"), notifications);
 #endif
-
+	if (blinkTimeOut != NULL && blinkTimeOut > 0) {
 		DWORD htOut = 0;
 		::RegistryGetDWORD(HKEY_LOCAL_MACHINE, appRegPath, TEXT("_tOut"), &htOut);
 		if (notifications == 0) {
@@ -511,24 +487,6 @@ DWORD getReminderCount() {
 	return 0;
 }
 
-bool timedOut() {
-	if (blinkTimeOut == 0) {
-		return false;
-	}
-
-	updateStopTime();
-	if(liBlinkStop.QuadPart == NULL || liBlinkStart.QuadPart == NULL) {
-		return false;
-	}
-
-	DWORD diff = (DWORD) (liBlinkStop.QuadPart - liBlinkStart.QuadPart) / tDivider;
-	if (diff >= blinkTimeOut) {
-		return true;
-	}
-
-	return false;
-}
-
 bool isSyncincOrCharging() {
 	DWORD hIsSyncing = 0;
 	::RegistryGetDWORD(SN_ACTIVESYNCSTATUS_ROOT, SN_ACTIVESYNCSTATUS_PATH, SN_ACTIVESYNCSTATUS_VALUE, &hIsSyncing);
@@ -572,10 +530,10 @@ void ZeroNotificationChanged() {
 }
 
 void NotificationChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData, const UINT cbData) {
-	if (dwUserData != NULL && blinkTimeOut > 0) {
+	if (dwUserData != NULL && blinkTimeOut != NULL && blinkTimeOut > 0) {
 		updateStartTime();
 	}
-	
+
 	if (ShouldNotify()) {
 		SetUnattended(true);
 		KeypadBlinkStart();
@@ -586,18 +544,56 @@ void NotificationChanged(HREGNOTIFY hNotify, DWORD dwUserData, const PBYTE pData
 	}
 }
 
+bool timedOut() {
+	if (blinkTimeOut == NULL || blinkTimeOut == 0) {
+		return false;
+	}
+
+	updateStopTime();
+	if (&liBlinkStart == NULL ||
+	   &liBlinkStop == NULL ||
+	   liBlinkStop.QuadPart == NULL ||
+	   liBlinkStart.QuadPart == NULL) {
+		return false;
+	}
+
+	DWORD diff = (DWORD) (liBlinkStop.QuadPart - liBlinkStart.QuadPart) / tDivider;
+	if (diff >= blinkTimeOut) {
+		return true;
+	}
+
+	return false;
+}
+
 void updateStartTime() {
-	timeOut = false;
+//	timeOut = false;
 
 	GetSystemTime(&stBlinkStart);
+	if (&stBlinkStart == NULL) {
+		return;
+	}
+
 	SystemTimeToFileTime(&stBlinkStart, &ftBlinkStart);
+	if (&ftBlinkStart == NULL) {
+		return;
+	}
+
 	liBlinkStart.LowPart = ftBlinkStart.dwLowDateTime;
 	liBlinkStart.HighPart = ftBlinkStart.dwHighDateTime;
 }
 
 void updateStopTime() {
 	GetSystemTime(&stBlinkStop);
+	if (&stBlinkStop == NULL) {
+//		timeOut = false;
+		return;
+	}
+
 	SystemTimeToFileTime(&stBlinkStop, &ftBlinkStop);
+	if (&ftBlinkStop == NULL) {
+		return;
+	}
+
 	liBlinkStop.LowPart = ftBlinkStop.dwLowDateTime;
 	liBlinkStop.HighPart = ftBlinkStop.dwHighDateTime;
 }
@@ -670,7 +666,6 @@ void blinkFunky(Keypad keypad) {
 			Sleep(75);
 		}
 	}
-
 
 	keypad.TurnOff();
 }
